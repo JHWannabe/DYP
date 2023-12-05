@@ -112,7 +112,9 @@ __global__ void transposeMatrixKernel(const double* inputMatrix, double* outputM
     int row = blockIdx.x * blockDim.x + threadIdx.x;
     int col = blockIdx.y * blockDim.y + threadIdx.y;
     if (row < rows && col < cols) {
-        outputMatrix[row * cols + col] = inputMatrix[row + rows * col];
+        if (col == 0) {
+            outputMatrix[row] = inputMatrix[row];
+        }
     }
 }
 
@@ -130,9 +132,7 @@ int main() {
     dim3 threadsPerBlock2(32, 32);
 
     cv::Mat img0, img1, img2, img3;
-
-    time_t _tstart, _tend;
-    double _tTime;
+    time_t _tstart, _tend, mid;
     _tstart = clock();
 
     img0 = cv::imread("resize/0_B0.bmp", cv::IMREAD_GRAYSCALE);
@@ -162,118 +162,71 @@ int main() {
     _merged_matrix.col(2) = Eigen::VectorXd::Map(image2Data.data(), _size);
     _merged_matrix.col(3) = Eigen::VectorXd::Map(image3Data.data(), _size);
 
-    double* d_merged_matrix;
-    cudaMalloc((void**)&d_merged_matrix, 4 * _size * sizeof(double));
-    cudaMemcpy(d_merged_matrix, _merged_matrix.data(), 4 * _size * sizeof(double), cudaMemcpyHostToDevice);
-
-    int blocksPerGrid1 = (4 * _size + threadsPerBlock1 - 1) / threadsPerBlock1;
-    normalizeImage << <blocksPerGrid1, threadsPerBlock1 >> > (d_merged_matrix, 4 * _size);
-
-    // _merged_matrix(_size,4) * _lightMatpinv(4,3) °ö¼À
     Eigen::MatrixXd _rho_t(_size, 3);
-    double* d_lightMatpinv, * d_rho_t;
+    cv::Mat cvMatResult(_rows, _cols, CV_8UC1);
+    double* d_lightMatpinv, * d_rho_t = new double[_size * 3];
+    double* d_matrix, * d_norm, * d_norm_t;
+    double* d_rho, * d_transposed_rho, * d_n;
+    uchar* d_result;
+    double* d_merged_matrix;
 
-    cudaMalloc((void**)&d_lightMatpinv, _size * 4 * sizeof(double));
-    cudaMalloc((void**)&d_rho_t, _size * 3 * sizeof(double));
+    cudaMalloc((void**)&d_merged_matrix, 4 * _size * sizeof(double));
+    cudaMalloc((void**)&d_lightMatpinv, 4 * _size * sizeof(double));
+    cudaMalloc((void**)&d_rho_t, 3 * _size * sizeof(double));
+    cudaMalloc((void**)&d_matrix, _size * sizeof(double));
+    cudaMalloc((void**)&d_norm, _size * sizeof(double));
+    cudaMalloc((void**)&d_norm_t, _size * sizeof(double));
+    cudaMalloc((void**)&d_result, sizeof(uchar) * _rows * _cols);
+    cudaMalloc((void**)&d_rho, 3 * _size * sizeof(double));
+    cudaMalloc((void**)&d_transposed_rho, 3 * _size * sizeof(double));
+    cudaMalloc((void**)&d_n, _size * sizeof(double));
+
+    cudaMemcpy(d_merged_matrix, _merged_matrix.data(), 4 * _size * sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(d_lightMatpinv, _lightMatpinv.data(), 4 * 3 * sizeof(double), cudaMemcpyHostToDevice);
 
+    int blocksPerGrid1 = (4 * _size + threadsPerBlock1 - 1) / threadsPerBlock1;
     dim3 blocksPerGrid2((_size + threadsPerBlock2.x - 1) / threadsPerBlock2.x, (3 + threadsPerBlock2.y - 1) / threadsPerBlock2.y);
     dim3 blocksPerGrid3((_rows + threadsPerBlock2.x - 1) / threadsPerBlock2.x, (_cols + threadsPerBlock2.y - 1) / threadsPerBlock2.y);
     dim3 blocksPerGrid4((_cols + threadsPerBlock2.x - 1) / threadsPerBlock2.x, (_rows + threadsPerBlock2.y - 1) / threadsPerBlock2.y);
 
-    matrixMultiplyKernel << <blocksPerGrid2, threadsPerBlock2 >> > (d_merged_matrix, d_lightMatpinv, d_rho_t, _size, 4, 3);
-
-    cudaMemcpy(_rho_t.data(), d_rho_t, _size * 3 * sizeof(double), cudaMemcpyDeviceToHost);
-    cudaFree(d_lightMatpinv);
-    cudaFree(d_merged_matrix);
-
-    double* h_matrixData = new double[_size * 3];
-
-    for (int i = 0; i < _size; ++i) {   //_SIZE
-        for (int j = 0; j < 3; ++j) {   //3
-            h_matrixData[i * 3 + j] = _rho_t(i, j);
-        }
-    }
-
-    double* d_matrixData, * d_matrix, * d_norm, * d_norm_t;
-    Eigen::MatrixXd albedo(_cols, _rows);
-    cv::Mat cvMatResult(_rows, _cols, CV_8UC1);
-    uchar* d_result;
+    normalizeImage << <blocksPerGrid1, threadsPerBlock1 >> > (d_merged_matrix, 4 * _size);
 
     blocksPerGrid1 = (_size + threadsPerBlock1 - 1) / threadsPerBlock1;
 
-    cudaMalloc((void**)&d_matrix, _size * sizeof(double));
-    cudaMalloc((void**)&d_matrixData, 3 * _size * sizeof(double));
-    cudaMalloc((void**)&d_norm, _size * sizeof(double));
-    cudaMalloc((void**)&d_norm_t, _size * sizeof(double));
-    cudaMalloc((void**)&d_result, sizeof(uchar) * _rows * _cols);
-    cudaMemcpy(d_matrixData, h_matrixData, 3 * _size * sizeof(double), cudaMemcpyHostToDevice);
-
-    rowNormKernel << <blocksPerGrid1, threadsPerBlock1 >> > (d_matrixData, d_norm, _size, 3);
+    matrixMultiplyKernel << <blocksPerGrid2, threadsPerBlock2 >> > (d_merged_matrix, d_lightMatpinv, d_rho_t, _size, 4, 3);
+    rowNormKernel << <blocksPerGrid1, threadsPerBlock1 >> > (&d_rho_t[2 * _size], d_norm, _size, 1);
     clipKernel << <blocksPerGrid1, threadsPerBlock1 >> > (d_norm, d_norm_t, _size);
     reshapeMatrixKernel << <blocksPerGrid3, threadsPerBlock2 >> > (d_norm_t, d_matrix, _cols, _rows);
     flipKernel << <blocksPerGrid4, threadsPerBlock2 >> > (d_matrix, d_result, _rows, _cols);
 
-    cudaMemcpy(cvMatResult.data, d_result, sizeof(uchar) * _rows * _cols, cudaMemcpyDeviceToHost);
-    cudaFree(d_matrixData);
-    cudaFree(d_norm);
-    cudaFree(d_matrix);
-    cudaFree(d_result);
-
-    Eigen::MatrixXd transposed_rho(3, _size);
-    double* d_rho, * d_transposed_rho;
-
-    cudaMalloc((void**)&d_rho, 3 * _size * sizeof(double));
-    cudaMalloc((void**)&d_transposed_rho, 3 * _size * sizeof(double));
-    blocksPerGrid1 = ((3 + threadsPerBlock1 - 1) / threadsPerBlock1); // ±×¸®µå Å©±â ¼³Á¤
+    blocksPerGrid1 = ((3 + threadsPerBlock1 - 1) / threadsPerBlock1);
 
     elementWiseDivisionKernel << <blocksPerGrid2, threadsPerBlock2 >> > (d_rho_t, d_norm_t, d_rho, _size, 3);
     setZerosToOnes << <blocksPerGrid1, threadsPerBlock1 >> > (d_rho, _size, 3);
     transposeMatrixKernel << <blocksPerGrid2, threadsPerBlock2 >> > (d_rho, d_transposed_rho, _size, 3);
+    copyKernel << <blocksPerGrid3, threadsPerBlock2 >> > (d_transposed_rho, d_n, _rows, _cols);
 
-    cudaMemcpy(transposed_rho.data(), d_transposed_rho, 3 * _size * sizeof(double), cudaMemcpyDeviceToHost);
+    Eigen::MatrixXd col0(_rows, _cols);
+
+    cudaMemcpy(cvMatResult.data, d_result, sizeof(uchar) * _rows * _cols, cudaMemcpyDeviceToHost);
+    cudaMemcpy(col0.data(), d_n, _size * sizeof(double), cudaMemcpyDeviceToHost);
+
+    cudaFree(d_lightMatpinv);
+    cudaFree(d_merged_matrix);
+    cudaFree(d_norm);
+    cudaFree(d_matrix);
+    cudaFree(d_result);
     cudaFree(d_rho_t);
     cudaFree(d_norm_t);
     cudaFree(d_rho);
+    cudaFree(d_n);
     cudaFree(d_transposed_rho);
 
-    Eigen::MatrixXd normalmap(_rows, _cols * 3), row0(1, _size), row1(1, _size), row2(1, _size), col0(_rows, _cols), col1(_rows, _cols), col2(_rows, _cols);
-	row0 << transposed_rho.row(0);
-	row1 << transposed_rho.row(1);
-	row2 << transposed_rho.row(2);
-
-	double* a0, * a1, * a2, * d_n0, * d_n1, * d_n2;
-	cudaMalloc((void**)&a0, _size * sizeof(double));
-    cudaMalloc((void**)&a1, _size * sizeof(double));
-    cudaMalloc((void**)&a2, _size * sizeof(double));
-	cudaMalloc((void**)&d_n0, _size * sizeof(double));
-    cudaMalloc((void**)&d_n1, _size * sizeof(double));
-    cudaMalloc((void**)&d_n2, _size * sizeof(double));
-
-	cudaMemcpy(a0, row0.data(), _size * sizeof(double), cudaMemcpyHostToDevice);
-    cudaMemcpy(a1, row1.data(), _size * sizeof(double), cudaMemcpyHostToDevice);
-    cudaMemcpy(a2, row2.data(), _size * sizeof(double), cudaMemcpyHostToDevice);
-
-	copyKernel << <blocksPerGrid3, threadsPerBlock2 >> > (a0, d_n0, _rows, _cols);
-    copyKernel << <blocksPerGrid3, threadsPerBlock2 >> > (a1, d_n1, _rows, _cols);
-    copyKernel << <blocksPerGrid3, threadsPerBlock2 >> > (a2, d_n2, _rows, _cols);
-
-	cudaMemcpy(col0.data(), d_n0, _size * sizeof(double), cudaMemcpyDeviceToHost);
-	cudaMemcpy(col1.data(), d_n1, _size * sizeof(double), cudaMemcpyDeviceToHost);
-	cudaMemcpy(col2.data(), d_n2, _size * sizeof(double), cudaMemcpyDeviceToHost);
-
-	normalmap << col0, col1, col2;
-
-    cudaFree(a0); cudaFree(a1); cudaFree(a2);
-    cudaFree(d_n0); cudaFree(d_n1); cudaFree(d_n2);
-
-    ////////////////////////////////////////////////////////////////////////////////////////
-
-    cv::Mat _normalmap, normalmap_cv(_rows, _cols, CV_64FC1);  // Use CV_64FC1 for double precision
+    cv::Mat _normalmap, normalmap_cv(_rows, _cols, CV_64FC1);
 
     for (int i = 0; i < _rows; ++i) {
         for (int j = 0; j < _cols; ++j) {
-            normalmap_cv.at<double>(i, j) = normalmap(i, j);
+            normalmap_cv.at<double>(i, j) = col0(i, j);
         }
     }
 
@@ -286,6 +239,6 @@ int main() {
     cv::imwrite("result/0_albedo0.bmp", cvMatResult);
     cv::imwrite("result/0_albedo1.bmp", _normalmap);
 
-    waitKey(3000);
+    waitKey(2000);
 
 }

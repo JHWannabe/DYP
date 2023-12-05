@@ -13,7 +13,6 @@
   <ItemGroup>
     <CudaCompile Include="File.cu" />
     <CudaCompile Include="main.cu" />
-    <CudaCompile Include="Practice.cu" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{6CD8766F-C395-48CC-A715-791E2D5852CC}</ProjectGuid>
