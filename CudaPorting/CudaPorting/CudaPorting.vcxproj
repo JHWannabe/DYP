@@ -11,7 +11,6 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="File.cu" />
     <CudaCompile Include="main.cu" />
   </ItemGroup>
   <PropertyGroup Label="Globals">

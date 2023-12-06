@@ -126,13 +126,15 @@ __global__ void copyKernel(double* A, double* B, int rows, int cols) {
     }
 }
 
-
 int main() {
     int threadsPerBlock1 = 1024;
     dim3 threadsPerBlock2(32, 32);
+    cudaStream_t s1, s2;
+    cudaStreamCreate(&s1);
+    cudaStreamCreate(&s2);
 
     cv::Mat img0, img1, img2, img3;
-    time_t _tstart, _tend, mid;
+    time_t _tstart, _tend;
     _tstart = clock();
 
     img0 = cv::imread("resize/0_B0.bmp", cv::IMREAD_GRAYSCALE);
@@ -163,7 +165,6 @@ int main() {
     _merged_matrix.col(3) = Eigen::VectorXd::Map(image3Data.data(), _size);
 
     Eigen::MatrixXd _rho_t(_size, 3);
-    cv::Mat cvMatResult(_rows, _cols, CV_8UC1);
     double* d_lightMatpinv, * d_rho_t = new double[_size * 3];
     double* d_matrix, * d_norm, * d_norm_t;
     double* d_rho, * d_transposed_rho, * d_n;
@@ -181,8 +182,8 @@ int main() {
     cudaMalloc((void**)&d_transposed_rho, 3 * _size * sizeof(double));
     cudaMalloc((void**)&d_n, _size * sizeof(double));
 
-    cudaMemcpy(d_merged_matrix, _merged_matrix.data(), 4 * _size * sizeof(double), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_lightMatpinv, _lightMatpinv.data(), 4 * 3 * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(d_merged_matrix, _merged_matrix.data(), 4 * _size * sizeof(double), cudaMemcpyHostToDevice, s1);
+    cudaMemcpyAsync(d_lightMatpinv, _lightMatpinv.data(), 4 * 3 * sizeof(double), cudaMemcpyHostToDevice, s2);
 
     int blocksPerGrid1 = (4 * _size + threadsPerBlock1 - 1) / threadsPerBlock1;
     dim3 blocksPerGrid2((_size + threadsPerBlock2.x - 1) / threadsPerBlock2.x, (3 + threadsPerBlock2.y - 1) / threadsPerBlock2.y);
@@ -199,17 +200,18 @@ int main() {
     reshapeMatrixKernel << <blocksPerGrid3, threadsPerBlock2 >> > (d_norm_t, d_matrix, _cols, _rows);
     flipKernel << <blocksPerGrid4, threadsPerBlock2 >> > (d_matrix, d_result, _rows, _cols);
 
-    blocksPerGrid1 = ((3 + threadsPerBlock1 - 1) / threadsPerBlock1);
+    blocksPerGrid1 = (3 + threadsPerBlock1 - 1) / threadsPerBlock1;
 
     elementWiseDivisionKernel << <blocksPerGrid2, threadsPerBlock2 >> > (d_rho_t, d_norm_t, d_rho, _size, 3);
     setZerosToOnes << <blocksPerGrid1, threadsPerBlock1 >> > (d_rho, _size, 3);
     transposeMatrixKernel << <blocksPerGrid2, threadsPerBlock2 >> > (d_rho, d_transposed_rho, _size, 3);
     copyKernel << <blocksPerGrid3, threadsPerBlock2 >> > (d_transposed_rho, d_n, _rows, _cols);
 
+    cv::Mat cvMatResult(_rows, _cols, CV_8UC1);
     Eigen::MatrixXd col0(_rows, _cols);
 
-    cudaMemcpy(cvMatResult.data, d_result, sizeof(uchar) * _rows * _cols, cudaMemcpyDeviceToHost);
-    cudaMemcpy(col0.data(), d_n, _size * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(cvMatResult.data, d_result, sizeof(uchar) * _rows * _cols, cudaMemcpyDeviceToHost, s1);
+    cudaMemcpyAsync(col0.data(), d_n, _size * sizeof(double), cudaMemcpyDeviceToHost, s2);
 
     cudaFree(d_lightMatpinv);
     cudaFree(d_merged_matrix);
@@ -222,7 +224,12 @@ int main() {
     cudaFree(d_n);
     cudaFree(d_transposed_rho);
 
-    cv::Mat _normalmap, normalmap_cv(_rows, _cols, CV_64FC1);
+    cudaStreamDestroy(s1);
+    cudaStreamDestroy(s2);
+
+    /////////////////////////////////////////////////////////////////////////////////////////////
+
+    cv::Mat _normalmap(_rows, _cols, CV_8UC3), normalmap_cv(_rows, _cols, CV_64FC1);
 
     for (int i = 0; i < _rows; ++i) {
         for (int j = 0; j < _cols; ++j) {
@@ -230,7 +237,6 @@ int main() {
         }
     }
 
-    cv::normalize(cvMatResult, cvMatResult, 0, 255, cv::NORM_MINMAX, CV_8UC1);
     cv::normalize(normalmap_cv, _normalmap, 0, 255, cv::NORM_MINMAX, CV_8UC3);
 
     _tend = clock();
