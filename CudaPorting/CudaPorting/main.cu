@@ -108,23 +108,14 @@ __global__ void setZerosToOnes(double* _rhoData, int rows, int cols) {
     }
 }
 
-__global__ void transposeMatrixKernel(const double* inputMatrix, double* outputMatrix, int rows, int cols) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int col = blockIdx.y * blockDim.y + threadIdx.y;
-    if (row < rows && col < cols) {
-        if (col == 0) {
-            outputMatrix[row] = inputMatrix[row];
-        }
-    }
-}
-
 __global__ void copyKernel(double* A, double* B, int rows, int cols) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     if (i < rows && j < cols) {
-        B[i + rows * j] = A[i * cols + j] / 255.0;
+        B[i * cols + j] = A[i * cols + j] / 255.0;
     }
 }
+
 
 int main() {
     int threadsPerBlock1 = 1024;
@@ -167,7 +158,7 @@ int main() {
     Eigen::MatrixXd _rho_t(_size, 3);
     double* d_lightMatpinv, * d_rho_t = new double[_size * 3];
     double* d_matrix, * d_norm, * d_norm_t;
-    double* d_rho, * d_transposed_rho, * d_n;
+    double* d_rho, * d_transposed_rho, * d_n, *d_nc;
     uchar* d_result;
     double* d_merged_matrix;
 
@@ -177,9 +168,8 @@ int main() {
     cudaMalloc((void**)&d_matrix, _size * sizeof(double));
     cudaMalloc((void**)&d_norm, _size * sizeof(double));
     cudaMalloc((void**)&d_norm_t, _size * sizeof(double));
-    cudaMalloc((void**)&d_result, sizeof(uchar) * _rows * _cols);
+    cudaMalloc((void**)&d_result, _size * sizeof(uchar));
     cudaMalloc((void**)&d_rho, 3 * _size * sizeof(double));
-    cudaMalloc((void**)&d_transposed_rho, 3 * _size * sizeof(double));
     cudaMalloc((void**)&d_n, _size * sizeof(double));
 
     cudaMemcpyAsync(d_merged_matrix, _merged_matrix.data(), 4 * _size * sizeof(double), cudaMemcpyHostToDevice, s1);
@@ -204,14 +194,24 @@ int main() {
 
     elementWiseDivisionKernel << <blocksPerGrid2, threadsPerBlock2 >> > (d_rho_t, d_norm_t, d_rho, _size, 3);
     setZerosToOnes << <blocksPerGrid1, threadsPerBlock1 >> > (d_rho, _size, 3);
-    transposeMatrixKernel << <blocksPerGrid2, threadsPerBlock2 >> > (d_rho, d_transposed_rho, _size, 3);
-    copyKernel << <blocksPerGrid3, threadsPerBlock2 >> > (d_transposed_rho, d_n, _rows, _cols);
+    copyKernel << <blocksPerGrid3, threadsPerBlock2 >> > (d_rho, d_n, _rows, _cols);
 
-    cv::Mat cvMatResult(_rows, _cols, CV_8UC1);
-    Eigen::MatrixXd col0(_rows, _cols);
+    cv::Mat cvMatResult(_rows, _cols, CV_8UC1), normalmap_cv(_rows, _cols, CV_64FC1);
 
-    cudaMemcpyAsync(cvMatResult.data, d_result, sizeof(uchar) * _rows * _cols, cudaMemcpyDeviceToHost, s1);
-    cudaMemcpyAsync(col0.data(), d_n, _size * sizeof(double), cudaMemcpyDeviceToHost, s2);
+    cudaMemcpyAsync(cvMatResult.data, d_result, _size * sizeof(uchar), cudaMemcpyDeviceToHost, s1);
+    cudaMemcpyAsync(normalmap_cv.data, d_n, _size * sizeof(double), cudaMemcpyDeviceToHost, s2);
+
+    /////////////////////////////////////////////////////////////////////////////////////////////
+
+    cv::Mat _normalmap(_rows, _cols, CV_8UC3);
+
+    cv::normalize(normalmap_cv, _normalmap, 0, 255, cv::NORM_MINMAX, CV_8UC3);
+
+    cv::imwrite("result/0_albedo0.bmp", cvMatResult);
+    cv::imwrite("result/0_albedo1.bmp", _normalmap);
+
+    _tend = clock();
+    cout << "수행시간 : " << (float)(_tend - _tstart) / 1000 << " s" << endl;
 
     cudaFree(d_lightMatpinv);
     cudaFree(d_merged_matrix);
@@ -222,28 +222,9 @@ int main() {
     cudaFree(d_norm_t);
     cudaFree(d_rho);
     cudaFree(d_n);
-    cudaFree(d_transposed_rho);
 
     cudaStreamDestroy(s1);
     cudaStreamDestroy(s2);
-
-    /////////////////////////////////////////////////////////////////////////////////////////////
-
-    cv::Mat _normalmap(_rows, _cols, CV_8UC3), normalmap_cv(_rows, _cols, CV_64FC1);
-
-    for (int i = 0; i < _rows; ++i) {
-        for (int j = 0; j < _cols; ++j) {
-            normalmap_cv.at<double>(i, j) = col0(i, j);
-        }
-    }
-
-    cv::normalize(normalmap_cv, _normalmap, 0, 255, cv::NORM_MINMAX, CV_8UC3);
-
-    _tend = clock();
-    cout << "수행시간 : " << (float)(_tend - _tstart) / 1000 << " s" << endl;
-
-    cv::imwrite("result/0_albedo0.bmp", cvMatResult);
-    cv::imwrite("result/0_albedo1.bmp", _normalmap);
 
     waitKey(2000);
 
