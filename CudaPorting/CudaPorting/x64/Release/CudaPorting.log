@@ -425,11 +425,11 @@ C:\Users\JHCHUN\Desktop\vcpkg\installed\x64-windows\include\unsupported\Eigen\CX
       return std::complex<double>(RandomToTypeNormal<double>(state, stream),
       ^
   
-C:\Users\JHCHUN\Desktop\CudaPorting\CudaPorting\main.cu(116): warning #177-D: variable "j" was declared but never referenced
+C:\Users\JHCHUN\Desktop\CudaPorting\CudaPorting\main.cu(113): warning #177-D: variable "j" was declared but never referenced
         int j = blockIdx.y * blockDim.y + threadIdx.y;
             ^
   
-C:\Users\JHCHUN\Desktop\CudaPorting\CudaPorting\main.cu(196): warning #177-D: variable "d_transposed_rho" was declared but never referenced
+C:\Users\JHCHUN\Desktop\CudaPorting\CudaPorting\main.cu(188): warning #177-D: variable "d_transposed_rho" was declared but never referenced
         double* d_matrix, * d_norm, * d_norm_t, * d_rho, * d_transposed_rho, * d_n, * d_min, * d_max;
                                                            ^
   
@@ -803,7 +803,7 @@ C:\Users\JHCHUN\Desktop\vcpkg\installed\x64-windows\include\Eigen\src/Core/Assig
 C:\Users\JHCHUN\Desktop\vcpkg\installed\x64-windows\include\Eigen\src/Core/CoreEvaluators.h(589): warning #20011-D: calling a __host__ function("LightMatrixPinv(const     ::std::vector< ::Eigen::Matrix<float, (int)4, (int)1, (int)0, (int)4, (int)1> , ::std::allocator< ::Eigen::Matrix<float, (int)4, (int)1, (int)0, (int)4, (int)1> > >  &)::[lambda(double) (instance 1)]::operator ()(double) const") from a __host__ __device__ function("Eigen::internal::unary_evaluator< ::Eigen::CwiseUnaryOp<    ::LightMatrixPinv(const     ::std::vector< ::Eigen::Matrix<float, (int)4, (int)1, (int)0, (int)4, (int)1> , ::std::allocator< ::Eigen::Matrix<float, (int)4, (int)1, (int)0, (int)4, (int)1> > >  &)   ::[lambda(double) (instance 1)], const  ::Eigen::Matrix<double, (int)-1, (int)1, (int)0, (int)-1, (int)1> > ,  ::Eigen::internal::IndexBased, double> ::coeff const") is not allowed
   
   main.cu
-  tmpxft_000631c0_00000000-7_main.cudafe1.cpp
+  tmpxft_00071bb4_00000000-7_main.cudafe1.cpp
 C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\include\driver_types.h(1329): warning C4819: 현재 코드 페이지(949)에서 표시할 수 없는 문자가 파일에 들어 있습니다. 데이터가 손실되지 않게 하려면 해당 파일을 유니코드 형식으로 저장하십시오.
 C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\include\driver_types.h(1329): warning C4819: 현재 코드 페이지(949)에서 표시할 수 없는 문자가 파일에 들어 있습니다. 데이터가 손실되지 않게 하려면 해당 파일을 유니코드 형식으로 저장하십시오.
 C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\include\driver_types.h(1329): warning C4819: 현재 코드 페이지(949)에서 표시할 수 없는 문자가 파일에 들어 있습니다. 데이터가 손실되지 않게 하려면 해당 파일을 유니코드 형식으로 저장하십시오.
@@ -973,7 +973,7 @@ C:\Users\JHCHUN\Desktop\vcpkg\installed\x64-windows\include\Eigen\src/Core/util/
 C:\Users\JHCHUN\Desktop\vcpkg\installed\x64-windows\include\Eigen\src/Core/util/DisableStupidWarnings.h(94): warning C4068: 알 수 없는 pragma 'diag_suppress'
 C:\Users\JHCHUN\Desktop\vcpkg\installed\x64-windows\include\Eigen\src/Core/util/DisableStupidWarnings.h(95): warning C4068: 알 수 없는 pragma 'diag_suppress'
 C:\Users\JHCHUN\Desktop\CudaPorting\CudaPorting\main.cu(20): warning C4267: '초기화 중': 'size_t'에서 'int'(으)로 변환하면서 데이터가 손실될 수 있습니다.
-C:\Users\JHCHUN\Desktop\CudaPorting\CudaPorting\main.cu(196): warning C4101: 'd_transposed_rho' :참조되지 않은 지역 변수입니다.
+C:\Users\JHCHUN\Desktop\CudaPorting\CudaPorting\main.cu(188): warning C4101: 'd_transposed_rho' :참조되지 않은 지역 변수입니다.
      C:\Users\JHCHUN\Desktop\CudaPorting\x64\Release\CudaPorting.lib 라이브러리 및 C:\Users\JHCHUN\Desktop\CudaPorting\x64\Release\CudaPorting.exp 개체를 생성하고 있습니다.
 LINK : warning LNK4098: 'LIBCMT' defaultlib가 다른 라이브러리와 충돌합니다. /NODEFAULTLIB:library를 사용하십시오.
   LINK : /LTCG를 지정했지만 코드를 생성할 필요가 없습니다. 명령줄에서 /LTCG를 제거하면 링커 성능이 향상됩니다.

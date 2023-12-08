@@ -32,15 +32,12 @@ Eigen::MatrixXd LightMatrixPinv(const std::vector<Eigen::Vector4f>& lightMat) {
     return svd.matrixV() * singularValuesInv.asDiagonal() * svd.matrixU().transpose();
 }
 
-__global__ void copyMatrixToCUDA(const double* image0Data, const double* image1Data, const double* image2Data, const double* image3Data, double* d_merged_matrix, int _size) {
+__global__ void copyMatrixToCUDA(int k, const double* imageData, double* d_merged_matrix, int _size) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (i < _size && j < M_IMAGE_COUNT) {
-        d_merged_matrix[i + _size * j] = (j == 0) ? image0Data[i] :
-            (j == 1) ? image1Data[i] :
-            (j == 2) ? image2Data[i] :
-            image3Data[i];
+        d_merged_matrix[i + _size * k] = imageData[i];
     }
 }
 
@@ -120,23 +117,15 @@ __global__ void setZerosToOnes(double* _rhoData, int rows, int cols) {
     }
 }
 
-__global__ void copyKernel(double* A, double* B, int rows, int cols) {
+__global__ void copyKernel(double* A, double* B, double* maxVal, double* minVal, int rows, int cols) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     if (i < rows && j < cols) {
         B[i * cols + j] = A[i * cols + j] / 255.0;
+        *minVal = (B[i * cols + j] < *minVal) ? B[i * cols + j] : *minVal;
+        *maxVal = (B[i * cols + j] > *maxVal) ? B[i * cols + j] : *maxVal;
     }
 }
-
-__global__ void minMaxKernel(double* A, int rows, int cols, double* maxVal, double* minVal) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < rows && j < cols) {
-        *minVal = (A[i * cols + j] < *minVal) ? A[i * cols + j] : *minVal;
-        *maxVal = (A[i * cols + j] > *maxVal) ? A[i * cols + j] : *maxVal;
-    }
-}
-
 
 __global__ void normalizeKernel(const double* input, uchar3* output, int rows, int cols, double* maxVal, double* minVal) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -144,7 +133,10 @@ __global__ void normalizeKernel(const double* input, uchar3* output, int rows, i
 
     if (i < rows && j < cols) {
         // Normalize the input values and convert to uchar3
-        double normalizedValue = 255.0 * (input[i * cols + j] - *minVal) / (*maxVal - *minVal);
+        double normalizedValue = 243.0 * (input[i * cols + j] - *minVal) / (*maxVal - *minVal) + 12.0;
+        if (normalizedValue > 253.0) {
+            normalizedValue = 253.0;
+        }
         uchar3 result;
         result.x = static_cast<uchar>(normalizedValue);
         result.y = static_cast<uchar>(normalizedValue);
@@ -155,7 +147,7 @@ __global__ void normalizeKernel(const double* input, uchar3* output, int rows, i
 
 
 int main() {
-    int threadsPerBlock1 = 1024;
+    int threadsPerBlock = 1024;
     dim3 threadsPerBlock2(32, 32);
     cudaStream_t s1, s2, s3, s4;
     cudaStreamCreate(&s1);
@@ -198,55 +190,55 @@ int main() {
     uchar3* d_output;
 
     cudaMalloc((void**)&d_merged_matrix, M_IMAGE_COUNT * _size * sizeof(double));
+    cudaMalloc((void**)&d_lightMatpinv, M_IMAGE_COUNT * 3 * sizeof(double));
+    cudaMalloc((void**)&d_output, _rows * _cols * sizeof(uchar3));
     cudaMalloc((void**)&d_image0Data, _size * sizeof(double));
     cudaMalloc((void**)&d_image1Data, _size * sizeof(double));
     cudaMalloc((void**)&d_image2Data, _size * sizeof(double));
     cudaMalloc((void**)&d_image3Data, _size * sizeof(double));
-    cudaMalloc((void**)&d_lightMatpinv, M_IMAGE_COUNT * _size * sizeof(double));
     cudaMalloc((void**)&d_rho_t, 3 * _size * sizeof(double));
+    cudaMalloc((void**)&d_rho, 3 * _size * sizeof(double));
     cudaMalloc((void**)&d_matrix, _size * sizeof(double));
-    cudaMalloc((void**)&d_norm, _size * sizeof(double));
     cudaMalloc((void**)&d_norm_t, _size * sizeof(double));
     cudaMalloc((void**)&d_result, _size * sizeof(uchar));
-    cudaMalloc((void**)&d_rho, 3 * _size * sizeof(double));
+    cudaMalloc((void**)&d_norm, _size * sizeof(double));
     cudaMalloc((void**)&d_n, _size * sizeof(double));
     cudaMalloc((void**)&d_min, sizeof(double));
     cudaMalloc((void**)&d_max, sizeof(double));
-    cudaMalloc((void**)&d_output, _rows * _cols * sizeof(uchar3));
 
-    // Copy image data to device memory
+    cudaMemcpyAsync(d_lightMatpinv, _lightMatpinv.data(), M_IMAGE_COUNT * 3 * sizeof(double), cudaMemcpyHostToDevice, s1);
+    cudaMemcpyAsync(d_max, &maxVal, sizeof(double), cudaMemcpyHostToDevice, s2);
+    cudaMemcpyAsync(d_min, &minVal, sizeof(double), cudaMemcpyHostToDevice, s3);
     cudaMemcpyAsync(d_image0Data, image0Data.data(), _size * sizeof(double), cudaMemcpyHostToDevice, s1);
     cudaMemcpyAsync(d_image1Data, image1Data.data(), _size * sizeof(double), cudaMemcpyHostToDevice, s2);
     cudaMemcpyAsync(d_image2Data, image2Data.data(), _size * sizeof(double), cudaMemcpyHostToDevice, s3);
     cudaMemcpyAsync(d_image3Data, image3Data.data(), _size * sizeof(double), cudaMemcpyHostToDevice, s4);
-    cudaMemcpyAsync(d_lightMatpinv, _lightMatpinv.data(), M_IMAGE_COUNT * 3 * sizeof(double), cudaMemcpyHostToDevice, s1);
-    cudaMemcpyAsync(d_max, &maxVal, sizeof(double), cudaMemcpyHostToDevice, s2);
-    cudaMemcpyAsync(d_min, &minVal, sizeof(double), cudaMemcpyHostToDevice, s3);
 
-
-    int blocksPerGrid1 = (M_IMAGE_COUNT * _size + threadsPerBlock1 - 1) / threadsPerBlock1;
-    dim3 blocksPerGrid((_size + threadsPerBlock2.x - 1) / threadsPerBlock2.x, (M_IMAGE_COUNT + threadsPerBlock2.y - 1) / threadsPerBlock2.y);
+    int blocksPerGrid = (M_IMAGE_COUNT * _size + threadsPerBlock - 1) / threadsPerBlock;
+    dim3 blocksPerGrid1((_size + threadsPerBlock2.x - 1) / threadsPerBlock2.x, (M_IMAGE_COUNT + threadsPerBlock2.y - 1) / threadsPerBlock2.y);
     dim3 blocksPerGrid2((_size + threadsPerBlock2.x - 1) / threadsPerBlock2.x, (3 + threadsPerBlock2.y - 1) / threadsPerBlock2.y);
     dim3 blocksPerGrid3((_rows + threadsPerBlock2.x - 1) / threadsPerBlock2.x, (_cols + threadsPerBlock2.y - 1) / threadsPerBlock2.y);
     dim3 blocksPerGrid4((_cols + threadsPerBlock2.x - 1) / threadsPerBlock2.x, (_rows + threadsPerBlock2.y - 1) / threadsPerBlock2.y);
 
-    copyMatrixToCUDA << <blocksPerGrid, threadsPerBlock2 >> > (d_image0Data, d_image1Data, d_image2Data, d_image3Data, d_merged_matrix, _size);
-    normalizeImage << <blocksPerGrid1, threadsPerBlock1 >> > (d_merged_matrix, M_IMAGE_COUNT * _size);
+    copyMatrixToCUDA << <blocksPerGrid1, threadsPerBlock2, 1, s1 >> > (0, d_image0Data, d_merged_matrix, _size);
+    copyMatrixToCUDA << <blocksPerGrid1, threadsPerBlock2, 1, s2 >> > (1, d_image1Data, d_merged_matrix, _size);
+    copyMatrixToCUDA << <blocksPerGrid1, threadsPerBlock2, 1, s3 >> > (2, d_image2Data, d_merged_matrix, _size);
+    copyMatrixToCUDA << <blocksPerGrid1, threadsPerBlock2, 1, s4 >> > (3, d_image3Data, d_merged_matrix, _size);
+    normalizeImage << <blocksPerGrid, threadsPerBlock >> > (d_merged_matrix, M_IMAGE_COUNT * _size);
     matrixMultiplyKernel << <blocksPerGrid2, threadsPerBlock2 >> > (d_merged_matrix, d_lightMatpinv, d_rho_t, _size, M_IMAGE_COUNT, 3);
 
-    blocksPerGrid1 = (_size + threadsPerBlock1 - 1) / threadsPerBlock1;
+    blocksPerGrid = (_size + threadsPerBlock - 1) / threadsPerBlock;
 
-    rowNormKernel << <blocksPerGrid1, threadsPerBlock1 >> > (&d_rho_t[2 * _size], d_norm, _size, 1);
-    clipKernel << <blocksPerGrid1, threadsPerBlock1 >> > (d_norm, d_norm_t, _size);
+    rowNormKernel << <blocksPerGrid, threadsPerBlock >> > (&d_rho_t[2 * _size], d_norm, _size, 1);
+    clipKernel << <blocksPerGrid, threadsPerBlock >> > (d_norm, d_norm_t, _size);
     reshapeMatrixKernel << <blocksPerGrid3, threadsPerBlock2 >> > (d_norm_t, d_matrix, _cols, _rows);
     flipKernel << <blocksPerGrid4, threadsPerBlock2 >> > (d_matrix, d_result, _rows, _cols);
 
-    blocksPerGrid1 = (3 + threadsPerBlock1 - 1) / threadsPerBlock1;
+    blocksPerGrid = (3 + threadsPerBlock - 1) / threadsPerBlock;
 
     elementWiseDivisionKernel << <blocksPerGrid2, threadsPerBlock2 >> > (d_rho_t, d_norm_t, d_rho, _size, 3);
-    setZerosToOnes << <blocksPerGrid1, threadsPerBlock1 >> > (d_rho, _size, 3);
-    copyKernel << <blocksPerGrid3, threadsPerBlock2 >> > (d_rho, d_n, _rows, _cols);
-    minMaxKernel << <blocksPerGrid3, threadsPerBlock2 >> > (d_n, _rows, _cols, d_max, d_min);
+    setZerosToOnes << <blocksPerGrid, threadsPerBlock >> > (d_rho, _size, 3);
+    copyKernel << <blocksPerGrid3, threadsPerBlock2 >> > (d_rho, d_n, d_max, d_min, _rows, _cols);
     normalizeKernel << <blocksPerGrid3, threadsPerBlock2 >> > (d_n, d_output, _rows, _cols, d_max, d_min);
 
     cv::Mat cvMatResult(_rows, _cols, CV_8UC1), _normalmap(_rows, _cols, CV_8UC3);
@@ -257,21 +249,23 @@ int main() {
     /////////////////////////////////////////////////////////////////////////////////////////////
 
 
-
-
     cv::imwrite("result/0_albedo0.bmp", cvMatResult);
     cv::imwrite("result/0_albedo1.bmp", _normalmap);
 
     _tend = clock();
     cout << "수행시간 : " << (float)(_tend - _tstart) / 1000 << " s" << endl;
 
-    cudaFree(d_lightMatpinv);
     cudaFree(d_merged_matrix);
-    cudaFree(d_norm);
-    cudaFree(d_matrix);
-    cudaFree(d_result);
+    cudaFree(d_image0Data);
+    cudaFree(d_image1Data);
+    cudaFree(d_image2Data);
+    cudaFree(d_image3Data);
+    cudaFree(d_lightMatpinv);
     cudaFree(d_rho_t);
+    cudaFree(d_matrix);
+    cudaFree(d_norm);
     cudaFree(d_norm_t);
+    cudaFree(d_result);
     cudaFree(d_rho);
     cudaFree(d_n);
     cudaFree(d_output);
@@ -280,6 +274,8 @@ int main() {
 
     cudaStreamDestroy(s1);
     cudaStreamDestroy(s2);
+    cudaStreamDestroy(s3);
+    cudaStreamDestroy(s4);
 
     waitKey(1000);
 
