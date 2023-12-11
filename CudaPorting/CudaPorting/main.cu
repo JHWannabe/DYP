@@ -16,7 +16,7 @@ using namespace std;
 
 #define M_IMAGE_COUNT 4
 
-Eigen::MatrixXd LightMatrixPinv(const std::vector<Eigen::Vector4f>& lightMat) {
+Eigen::MatrixXd LightMatrix(const std::vector<Eigen::Vector4f>& lightMat) {
     int numRows = lightMat.size();
     int numCols = (numRows > 0) ? lightMat[0].size() : 0;
 
@@ -24,12 +24,14 @@ Eigen::MatrixXd LightMatrixPinv(const std::vector<Eigen::Vector4f>& lightMat) {
     for (int i = 0; i < numRows; ++i) {
         matrix.row(i) = lightMat[i].cast<double>();
     }
+    return matrix;
+}
 
-    Eigen::JacobiSVD<Eigen::MatrixXd> svd(matrix, Eigen::ComputeThinU | Eigen::ComputeThinV);
-    Eigen::MatrixXd singularValuesInv = svd.singularValues().unaryExpr([&](double sv) {
-        return (sv > 1e-8) ? (1.0 / sv) : 0.0;
-        });
-    return svd.matrixV() * singularValuesInv.asDiagonal() * svd.matrixU().transpose();
+__global__ void pinvKernel(const double* singularValues, double* singularValuesInv, int size, double tolerance) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        singularValuesInv[idx] = (singularValues[idx] > tolerance) ? (1.0 / singularValues[idx]) : 0.0;
+    }
 }
 
 __global__ void copyMatrixToCUDA(int k, const double* imageData, double* d_merged_matrix, int _size) {
@@ -130,6 +132,7 @@ int main() {
     double* d_merged_matrix, * d_image0Data, * d_image1Data, * d_image2Data, * d_image3Data;
     double* d_lightMatpinv, * d_rho_t;
     double* d_norm_t, * d_rho, * d_transposed_rho, * d_n, * d_min, * d_max;
+    double* d_singularValues, * d_singularValuesInv;
     uchar* d_result;
     uchar3* d_output;
 
@@ -141,7 +144,9 @@ int main() {
     lightMat.emplace_back(-0.613372, 0.613372, 0.613372, -0.613372);
     lightMat.emplace_back(0.49754286, 0.49754286, 0.49754286, 0.49754286);
 
-    Eigen::MatrixXd _lightMatpinv = LightMatrixPinv(lightMat);
+    Eigen::MatrixXd _lightMat = LightMatrix(lightMat);
+    Eigen::MatrixXd _lightMatpinv;
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(_lightMat, Eigen::ComputeThinU | Eigen::ComputeThinV);
 
     img0 = cv::imread("resize/0_B0.bmp", cv::IMREAD_GRAYSCALE);
     img1 = cv::imread("resize/0_B1.bmp", cv::IMREAD_GRAYSCALE);
@@ -157,6 +162,8 @@ int main() {
     std::vector<double> image2Data(img2.ptr<uchar>(), img2.ptr<uchar>() + _size);
     std::vector<double> image3Data(img3.ptr<uchar>(), img3.ptr<uchar>() + _size);
 
+    cudaMalloc((void**)&d_singularValues, M_IMAGE_COUNT * sizeof(double));
+    cudaMalloc((void**)&d_singularValuesInv, M_IMAGE_COUNT * sizeof(double));
     cudaMalloc((void**)&d_merged_matrix, M_IMAGE_COUNT * _size * sizeof(double));
     cudaMalloc((void**)&d_lightMatpinv, M_IMAGE_COUNT * 3 * sizeof(double));
     cudaMalloc((void**)&d_output, _rows * _cols * sizeof(uchar3));
@@ -172,15 +179,24 @@ int main() {
     cudaMalloc((void**)&d_min, sizeof(double));
     cudaMalloc((void**)&d_max, sizeof(double));
 
-    cudaMemcpyAsync(d_lightMatpinv, _lightMatpinv.data(), M_IMAGE_COUNT * 3 * sizeof(double), cudaMemcpyHostToDevice, s1);
-    cudaMemcpyAsync(d_max, &maxVal, sizeof(double), cudaMemcpyHostToDevice, s2);
-    cudaMemcpyAsync(d_min, &minVal, sizeof(double), cudaMemcpyHostToDevice, s3);
+    cudaMemcpyAsync(d_singularValues, svd.singularValues().data(), M_IMAGE_COUNT * sizeof(double), cudaMemcpyHostToDevice, s1);
+
+    int blocksPerGrid = (M_IMAGE_COUNT + threadsPerBlock - 1) / threadsPerBlock;
+    pinvKernel << <blocksPerGrid, threadsPerBlock >> > (d_singularValues, d_singularValuesInv, M_IMAGE_COUNT, 1e-8);
+
+    Eigen::VectorXd h_singularValuesInv(M_IMAGE_COUNT);
+    cudaMemcpy(h_singularValuesInv.data(), d_singularValuesInv, M_IMAGE_COUNT * sizeof(double), cudaMemcpyDeviceToHost);
+    _lightMatpinv = svd.matrixV() * h_singularValuesInv.asDiagonal() * svd.matrixU().transpose();
+
+    cudaMemcpyAsync(d_lightMatpinv, _lightMatpinv.data(), M_IMAGE_COUNT * 3 * sizeof(double), cudaMemcpyHostToDevice, s2);
+    cudaMemcpyAsync(d_max, &maxVal, sizeof(double), cudaMemcpyHostToDevice, s3);
+    cudaMemcpyAsync(d_min, &minVal, sizeof(double), cudaMemcpyHostToDevice, s4);
     cudaMemcpyAsync(d_image0Data, image0Data.data(), _size * sizeof(double), cudaMemcpyHostToDevice, s1);
     cudaMemcpyAsync(d_image1Data, image1Data.data(), _size * sizeof(double), cudaMemcpyHostToDevice, s2);
     cudaMemcpyAsync(d_image2Data, image2Data.data(), _size * sizeof(double), cudaMemcpyHostToDevice, s3);
     cudaMemcpyAsync(d_image3Data, image3Data.data(), _size * sizeof(double), cudaMemcpyHostToDevice, s4);
 
-    int blocksPerGrid = (_size + threadsPerBlock - 1) / threadsPerBlock;
+    blocksPerGrid = (_size + threadsPerBlock - 1) / threadsPerBlock;
     dim3 blocksPerGrid1((_size + threadsPerBlock2.x - 1) / threadsPerBlock2.x, (M_IMAGE_COUNT + threadsPerBlock2.y - 1) / threadsPerBlock2.y);
     dim3 blocksPerGrid2((_size + threadsPerBlock2.x - 1) / threadsPerBlock2.x, (3 + threadsPerBlock2.y - 1) / threadsPerBlock2.y);
     dim3 blocksPerGrid3((_rows + threadsPerBlock2.x - 1) / threadsPerBlock2.x, (_cols + threadsPerBlock2.y - 1) / threadsPerBlock2.y);
@@ -213,6 +229,8 @@ int main() {
     _tend = clock();
     cout << "수행시간 : " << (float)(_tend - _tstart) / 1000 << " s" << endl;
 
+    cudaFree(d_singularValues);
+    cudaFree(d_singularValuesInv);
     cudaFree(d_merged_matrix);
     cudaFree(d_image0Data);
     cudaFree(d_image1Data);
