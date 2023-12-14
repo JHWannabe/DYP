@@ -4,8 +4,6 @@
 #include "opencv2/core/eigen.hpp"
 #include "opencv2/highgui/highgui.hpp"
 #include <iostream>
-#include <vector>
-#include <ctime>
 
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
@@ -214,7 +212,7 @@ int main() {
     cv::imwrite("result/0_albedo1.bmp", _normalmap);
 
     _tend = clock();
-    cout << "수행시간 : " << (float)(_tend - _tstart) / 1000 << " s" << endl;
+    cout << "Runtime : " << (float)(_tend - _tstart) / 1000 << " s" << endl;
 
     cudaFree(d_singleValues);
     cudaFree(d_singleValuesInv);
