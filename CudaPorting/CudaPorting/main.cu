@@ -125,13 +125,13 @@ int main() {
     time_t _tstart, _tend;
     _tstart = clock();
 
-    Eigen::MatrixXd _lightMat(3, 4);
+    MatrixXd _lightMat(3, 4);
     _lightMat << -0.6133723, -0.6133723, 0.6133723, 0.6133723,
         -0.613372, 0.613372, 0.613372, -0.613372,
         0.49754286, 0.49754286, 0.49754286, 0.49754286;
 
-    Eigen::MatrixXd _lightMatpinv;
-    Eigen::JacobiSVD<Eigen::MatrixXd> svd(_lightMat, Eigen::ComputeThinU | Eigen::ComputeThinV);
+    MatrixXd _lightMatpinv;
+    JacobiSVD<Eigen::MatrixXd> svd(_lightMat, Eigen::ComputeThinU | Eigen::ComputeThinV);
 
     img0 = cv::imread("resize/0_B0.bmp", cv::IMREAD_GRAYSCALE);
     img1 = cv::imread("resize/0_B1.bmp", cv::IMREAD_GRAYSCALE);
@@ -141,11 +141,11 @@ int main() {
     int _rows = img0.rows;
     int _cols = img0.cols;
     int _size = _rows * _cols;
-    
-    std::vector<double> image0Data(img0.ptr<uchar>(), img0.ptr<uchar>() + _size);
-    std::vector<double> image1Data(img1.ptr<uchar>(), img1.ptr<uchar>() + _size);
-    std::vector<double> image2Data(img2.ptr<uchar>(), img2.ptr<uchar>() + _size);
-    std::vector<double> image3Data(img3.ptr<uchar>(), img3.ptr<uchar>() + _size);
+
+    vector<double> image0Data(img0.ptr<uchar>(), img0.ptr<uchar>() + _size);
+    vector<double> image1Data(img1.ptr<uchar>(), img1.ptr<uchar>() + _size);
+    vector<double> image2Data(img2.ptr<uchar>(), img2.ptr<uchar>() + _size);
+    vector<double> image3Data(img3.ptr<uchar>(), img3.ptr<uchar>() + _size);
 
     cudaMalloc((void**)&d_merged_matrix, M_IMAGE_COUNT * _size * sizeof(double));
     cudaMalloc((void**)&d_lightMatpinv, M_IMAGE_COUNT * 3 * sizeof(double));
@@ -169,7 +169,7 @@ int main() {
     int blocksPerGrid = (M_IMAGE_COUNT + threadsPerBlock - 1) / threadsPerBlock;
     pinvKernel << <blocksPerGrid, threadsPerBlock >> > (d_singleValues, d_singleValuesInv, M_IMAGE_COUNT);
 
-    Eigen::VectorXd h_singularValuesInv(M_IMAGE_COUNT);
+    VectorXd h_singularValuesInv(M_IMAGE_COUNT);
     cudaMemcpyAsync(h_singularValuesInv.data(), d_singleValuesInv, M_IMAGE_COUNT * sizeof(double), cudaMemcpyDeviceToHost, s2);
     _lightMatpinv = svd.matrixV() * h_singularValuesInv.asDiagonal() * svd.matrixU().transpose();
 
@@ -191,7 +191,7 @@ int main() {
     copyMatrixToCUDA << <blocksPerGrid1, threadsPerBlock2, 1, s2 >> > (1, d_image1Data, d_merged_matrix, _size);
     copyMatrixToCUDA << <blocksPerGrid1, threadsPerBlock2, 1, s3 >> > (2, d_image2Data, d_merged_matrix, _size);
     copyMatrixToCUDA << <blocksPerGrid1, threadsPerBlock2, 1, s4 >> > (3, d_image3Data, d_merged_matrix, _size);
-    
+
     matrixMultiplyKernel << <blocksPerGrid2, threadsPerBlock2 >> > (d_merged_matrix, d_lightMatpinv, d_rho_t, _size, M_IMAGE_COUNT, 3);
 
     rowNormClipKernel << <blocksPerGrid, threadsPerBlock >> > (&d_rho_t[2 * _size], d_norm_t, _size, 1);
@@ -204,29 +204,31 @@ int main() {
 
     normalizeKernel << <blocksPerGrid3, threadsPerBlock2 >> > (d_n, d_output, d_max, d_min, _rows, _cols);
 
-    cv::Mat cvMatResult(_rows, _cols, CV_8UC1), _normalmap(_rows, _cols, CV_8UC3);
+    Mat cvMatResult(_rows, _cols, CV_8UC1), _normalmap(_rows, _cols, CV_8UC3);
 
     cudaMemcpyAsync(cvMatResult.data, d_result, _size * sizeof(uchar), cudaMemcpyDeviceToHost, s1);
     cudaMemcpyAsync(_normalmap.data, d_output, _size * sizeof(uchar3), cudaMemcpyDeviceToHost, s2);
 
-    cv::imwrite("result/0_albedo0.bmp", cvMatResult);
-    cv::imwrite("result/0_albedo1.bmp", _normalmap);
+    imwrite("result/0_albedo0.bmp", cvMatResult);
+    imwrite("result/0_albedo1.bmp", _normalmap);
 
     _tend = clock();
     cout << "Runtime : " << (float)(_tend - _tstart) / 1000 << " s" << endl;
 
     cudaFree(d_merged_matrix);
+    cudaFree(d_lightMatpinv);
+    cudaFree(d_singleValuesInv);
+    cudaFree(d_singleValues);
+    cudaFree(d_output);
     cudaFree(d_image0Data);
     cudaFree(d_image1Data);
     cudaFree(d_image2Data);
     cudaFree(d_image3Data);
-    cudaFree(d_lightMatpinv);
     cudaFree(d_rho_t);
+    cudaFree(d_rho);
     cudaFree(d_norm_t);
     cudaFree(d_result);
-    cudaFree(d_rho);
     cudaFree(d_n);
-    cudaFree(d_output);
     cudaFree(d_min);
     cudaFree(d_max);
 
@@ -236,5 +238,4 @@ int main() {
     cudaStreamDestroy(s4);
 
     waitKey(1000);
-
 }

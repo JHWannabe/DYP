@@ -1,1 +1,2 @@
 C:\Users\JHCHUN\Desktop\CudaPorting\CudaPorting\x64\Release\CudaPorting.vcxproj.CopyComplete
+C:\Users\JHCHUN\Desktop\DYP\CudaPorting\CudaPorting\x64\Release\CudaPorting.vcxproj.CopyComplete
